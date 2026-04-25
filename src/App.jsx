@@ -13,6 +13,22 @@ import {
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 
+// Fix for default Leaflet icon paths in Vite/React
+import icon from 'leaflet/dist/images/marker-icon.png'
+import iconShadow from 'leaflet/dist/images/marker-shadow.png'
+import iconRetina from 'leaflet/dist/images/marker-icon-2x.png'
+
+let DefaultIcon = L.icon({
+    iconUrl: icon,
+    shadowUrl: iconShadow,
+    iconRetinaUrl: iconRetina,
+    iconSize: [25, 41],
+    iconAnchor: [12, 41],
+    popupAnchor: [1, -34],
+    shadowSize: [41, 41]
+});
+L.Marker.prototype.options.icon = DefaultIcon;
+
 function App() {
   const envKey = import.meta.env.VITE_GEMINI_API_KEY
   const actualEnvKey = envKey && envKey.trim() !== '' ? envKey.trim() : null
@@ -49,11 +65,21 @@ function App() {
         attributionControl: false
       }).setView([selectedCoords.lat, selectedCoords.lng], 16)
 
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(mapInstance.current)
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+        subdomains: 'abcd',
+        maxZoom: 20
+      }).addTo(mapInstance.current)
 
       markerInstance.current = L.marker([selectedCoords.lat, selectedCoords.lng]).addTo(mapInstance.current)
         .bindPopup(`<b>${suggestedStore}</b><br>${suggestedAddress}`)
         .openPopup()
+
+        // Fix for blank map issue: Invalidate size after a delay to ensure container is ready
+        setTimeout(() => {
+          if (mapInstance.current) {
+            mapInstance.current.invalidateSize();
+          }
+        }, 500);
     }
   }, [showResult, selectedCoords, suggestedStore, suggestedAddress])
 
@@ -110,10 +136,11 @@ function App() {
     2. "address": A realistic street address in ${location}.
     3. "lat": Approximate latitude for this store.
     4. "lng": Approximate longitude for this store.
-    5. "items": An array of 3 specific pasalubong items that are famous in ${location}.
-    6. "script": A funny Taglish script explaining why these specific items are actually "special local finds".
+    5. "items": An array of 3 objects, each with "name" and "price" (number).
+    6. "script": A funny Taglish script.
     
-    Respond ONLY with valid JSON.`
+    Response MUST be valid JSON only. USE DOUBLE QUOTES FOR ALL STRINGS. No markdown, no extra text.
+    Example Format: {"storeName": "Name", "address": "Addr", "lat": 14.5, "lng": 121.0, "items": [{"name": "Item", "price": 100}], "script": "Script"}`
 
     const cleanKey = apiKey.trim()
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${cleanKey}`, {
@@ -136,8 +163,15 @@ function App() {
     }
 
     let text = data.candidates[0].content.parts[0].text
-    text = text.replace(/```json/g, '').replace(/```/g, '').trim()
-    return JSON.parse(text)
+    // Aggressive cleanup for JSON
+    text = text.split('```json').pop().split('```').shift().trim()
+    
+    try {
+        return JSON.parse(text)
+    } catch (parseErr) {
+        console.error("Failed to parse AI response:", text)
+        throw new Error("The AI returned a messy response. Please try re-scanning.")
+    }
   }
 
   const orchestrate = async (isReroll = false) => {
@@ -315,15 +349,16 @@ function App() {
           </div>
         )}
 
-        {/* Loading Phase (Replaced Logs with simpler loading) */}
+        {/* Loading Phase (Silent & Minimal) */}
         {isOrchestrating && (
-          <div className="bg-slate-900 text-slate-300 rounded-2xl shadow-2xl p-8 mb-8 min-h-[300px] flex flex-col items-center justify-center relative overflow-hidden">
+          <div className="bg-slate-900 rounded-2xl shadow-2xl p-8 mb-8 min-h-[300px] flex flex-col items-center justify-center relative overflow-hidden">
             <div className="absolute inset-0 pointer-events-none overflow-hidden opacity-20">
               <div className="w-full h-1 bg-red-500 scan-line absolute top-0"></div>
             </div>
-            <RefreshCw className="w-12 h-12 text-red-500 animate-spin mb-4" />
-            <p className="text-xl font-bold text-white tracking-widest uppercase">Agent Orchestrating...</p>
-            <p className="text-slate-500 text-sm mt-2">Pinging local nodes & generating backstory</p>
+            <RefreshCw className="w-12 h-12 text-red-500 animate-spin" />
+            <div className="mt-6 w-12 h-1 bg-slate-800 rounded-full overflow-hidden">
+              <div className="w-full h-full bg-red-500 animate-[pulse_1.5s_infinite]"></div>
+            </div>
           </div>
         )}
 
@@ -332,16 +367,19 @@ function App() {
           <div className="space-y-6">
 
             {/* Store Found */}
-            <div className="bg-white rounded-2xl p-6 shadow-lg border-2 border-green-100 space-y-3">
+            <div className="bg-white rounded-2xl p-6 shadow-lg border-2 border-green-100 space-y-4">
               <div className="flex items-center justify-between">
-                <div>
+                <div className="flex-1 mr-4">
                   <h4 className="text-xs font-bold text-green-600 uppercase tracking-tighter">Target Acquired</h4>
-                  <p className="text-xl font-black text-slate-800">{suggestedStore}</p>
+                  <div className="flex items-center space-x-2">
+                    <p className="text-xl font-black text-slate-800">{suggestedStore}</p>
+                    <button onClick={() => setShowResult(false)} className="text-[10px] text-blue-500 font-bold hover:underline">Edit</button>
+                  </div>
                 </div>
                 <div className="flex space-x-2">
-                  <button
-                    onClick={() => orchestrate(true)}
-                    className="p-2 bg-slate-100 hover:bg-slate-200 rounded-full transition-colors group"
+                  <button 
+                    onClick={() => orchestrate(true)} 
+                    className="p-2 bg-slate-100 hover:bg-slate-200 rounded-full transition-colors group" 
                     title="Find another shop"
                   >
                     <RefreshCw className="w-4 h-4 text-slate-500 group-hover:rotate-180 transition-transform duration-500" />
@@ -351,14 +389,32 @@ function App() {
                   </div>
                 </div>
               </div>
-              <div className="flex items-start space-x-2 text-slate-500 text-[10px] md:text-xs">
-                <MapPin className="w-4 h-4 text-slate-400 mt-0.5" />
-                <span>{suggestedAddress}</span>
+              
+              <div className="relative">
+                <div className="flex items-start space-x-2 text-slate-500 text-[10px] md:text-xs mb-1">
+                    <MapPin className="w-4 h-4 text-slate-400 mt-0.5" />
+                    <span>{suggestedAddress}</span>
+                </div>
+                <div className="flex space-x-2">
+                    <input 
+                        type="text" 
+                        value={location} 
+                        onChange={(e) => setLocation(e.target.value)}
+                        placeholder="Change location..."
+                        className="flex-1 text-[10px] bg-slate-50 border border-slate-100 rounded px-2 py-1 focus:outline-none focus:border-blue-400"
+                    />
+                    <button 
+                        onClick={() => orchestrate()} 
+                        className="bg-slate-800 text-white text-[10px] px-2 py-1 rounded flex items-center"
+                    >
+                        <Search className="w-3 h-3 mr-1" /> Re-scan
+                    </button>
+                </div>
               </div>
 
               {/* Map Container */}
-              <div className="mt-4 rounded-xl overflow-hidden border border-slate-100 shadow-inner">
-                <div id="map" ref={mapRef} className="w-full h-48 bg-slate-100 flex items-center justify-center text-slate-300">
+              <div className="mt-4 rounded-xl overflow-hidden border border-slate-100 shadow-inner h-48 bg-slate-100">
+                <div id="map" ref={mapRef} className="w-full h-full min-h-[192px] z-10">
                   {/* Map injected here */}
                 </div>
               </div>
@@ -372,9 +428,16 @@ function App() {
               </h3>
               <ul className="space-y-2">
                 {shoppingList.map((item, idx) => (
-                  <li key={idx} className="flex items-center text-slate-600 bg-slate-50 px-3 py-2 rounded-lg">
-                    <div className="w-2 h-2 rounded-full bg-blue-400 mr-3"></div>
-                    <span>{item}</span>
+                  <li key={idx} className="flex items-center justify-between text-slate-600 bg-slate-50 px-3 py-2 rounded-lg">
+                    <div className="flex items-center">
+                        <div className="w-2 h-2 rounded-full bg-blue-400 mr-3"></div>
+                        <span>{typeof item === 'string' ? item : item.name}</span>
+                    </div>
+                    {item.price && (
+                        <span className="text-[10px] font-bold text-slate-400 bg-white px-2 py-0.5 rounded border border-slate-100">
+                            PHP {item.price}
+                        </span>
+                    )}
                   </li>
                 ))}
               </ul>
